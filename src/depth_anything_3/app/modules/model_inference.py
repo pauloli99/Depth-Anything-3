@@ -72,6 +72,7 @@ class ModelInference:
         infer_gs: bool = False,
         gs_trj_mode: str = "extend",
         gs_video_quality: str = "high",
+        export_format: str = "glb",
     ) -> Tuple[Any, Dict[int, Dict[str, Any]]]:
         """
         Run DepthAnything3 model inference on images.
@@ -93,9 +94,13 @@ class ModelInference:
         """
         print(f"Processing images from {target_dir}")
 
-        # Device check
-        device = "cuda" if torch.cuda.is_available() else "cpu"
-        device = torch.device(device)
+        # Device check - prioritize MPS for Apple Silicon, then CUDA, then CPU
+        if torch.backends.mps.is_available():
+            device = torch.device("mps")
+        elif torch.cuda.is_available():
+            device = torch.device("cuda")
+        else:
+            device = torch.device("cpu")
 
         # Initialize model if needed
         self.initialize_model(device)
@@ -160,16 +165,25 @@ class ModelInference:
             prediction = self.model.inference(
                 image_paths, export_dir=None, process_res_method=actual_method, infer_gs=infer_gs
             )
-        # num_max_points: int = 1_000_000,
-        export_to_glb(
-            prediction,
-            filter_black_bg=filter_black_bg,
-            filter_white_bg=filter_white_bg,
-            export_dir=target_dir,
-            show_cameras=show_camera,
-            conf_thresh_percentile=save_percentage,
-            num_max_points=int(num_max_points),
-        )
+
+        # Export results in specified format
+        from depth_anything_3.utils.export import export
+
+        export_kwargs = {
+            "glb": {
+                "filter_black_bg": filter_black_bg,
+                "filter_white_bg": filter_white_bg,
+                "show_cameras": show_camera,
+                "conf_thresh_percentile": save_percentage,
+                "num_max_points": int(num_max_points),
+            },
+            "colmap": {
+                "image_paths": image_paths,
+                "conf_thresh_percentile": save_percentage,
+                "process_res_method": actual_method,
+            },
+        }
+        export(prediction, export_format, target_dir, **export_kwargs)
 
         # export to gs video if needed
         if infer_gs:

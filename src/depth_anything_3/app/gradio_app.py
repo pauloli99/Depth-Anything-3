@@ -135,6 +135,7 @@ class DepthAnything3App:
                         num_max_points=num_max_points,
                         infer_gs=use_high_res_gs,
                         gs_trj_mode=gs_trj_mode,
+                        export_format="glb",
                         gs_video_quality=gs_video_quality,
                     )
 
@@ -225,7 +226,7 @@ class DepthAnything3App:
                                 gs_video, gs_info = self.ui_components.create_nvs_video()
 
                         # Inference control section (before inference)
-                        (process_res_method_dropdown, infer_gs) = (
+                        (process_res_method_dropdown, export_format_dropdown, infer_gs) = (
                             self.ui_components.create_inference_control_section()
                         )
 
@@ -277,6 +278,7 @@ class DepthAnything3App:
                 filter_black_bg,
                 filter_white_bg,
                 process_res_method_dropdown,
+                export_format_dropdown,
                 save_percentage,
                 submit_btn,
                 clear_btn,
@@ -321,6 +323,7 @@ class DepthAnything3App:
         filter_black_bg: gr.Checkbox,
         filter_white_bg: gr.Checkbox,
         process_res_method_dropdown: gr.Dropdown,
+        export_format_dropdown: gr.Dropdown,
         save_percentage: gr.Slider,
         submit_btn: gr.Button,
         clear_btn: gr.ClearButton,
@@ -380,6 +383,7 @@ class DepthAnything3App:
                 infer_gs,
                 gs_trj_mode,
                 gs_video_quality,
+                export_format_dropdown,
             ],
             outputs=[
                 reconstruction_output,

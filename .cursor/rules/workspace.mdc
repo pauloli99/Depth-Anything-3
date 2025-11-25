@@ -1,0 +1,7 @@
+---
+alwaysApply: true
+---
+
+# 在终端运行任何命令之前，请先检查conda环境，切换到正确的conda环境
+# 当前项目的conda环境是：“da3”
+# 

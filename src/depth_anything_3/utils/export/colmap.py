@@ -16,6 +16,7 @@ import os
 import pycolmap
 import cv2 as cv
 import numpy as np
+import sqlite3
 
 from PIL import Image
 
@@ -124,7 +125,15 @@ def export_to_colmap(
         reconstruction.add_image(image)
 
     # 3. Export
-    reconstruction.write(export_dir)
+    # Create sparse/0/ directory structure (COLMAP standard)
+    sparse_dir = os.path.join(export_dir, "sparse", "0")
+    os.makedirs(sparse_dir, exist_ok=True)
+
+    # Write reconstruction to sparse/0/
+    reconstruction.write(sparse_dir)
+
+    # Create project.ini and database.db files in sparse/0/
+    _create_project_files(sparse_dir, export_dir, image_paths)
 
 
 def _create_xyf(num_frames, height, width):
@@ -148,3 +157,134 @@ def _create_xyf(num_frames, height, width):
     points_xyf = np.stack((x_coords, y_coords, f_coords), axis=-1)
 
     return points_xyf
+
+
+def _create_project_files(sparse_dir: str, export_dir: str, image_paths: list[str]) -> None:
+    """
+    Create project.ini file and empty database.db for COLMAP GUI compatibility.
+
+    Args:
+        sparse_dir: Sparse reconstruction directory (sparse/0/)
+        export_dir: Export directory (parent of sparse/)
+        image_paths: List of image file paths
+    """
+    # Find the images directory
+    images_dir = None
+    for path in image_paths:
+        # Check if path contains 'images' directory
+        if "images" in path:
+            images_dir = os.path.dirname(path)
+            break
+
+    if images_dir is None:
+        # Fallback: look for images directory in export_dir
+        images_dir = os.path.join(export_dir, "images")
+
+    # Create empty database.db file in sparse/0/ (COLMAP SQLite database)
+    db_path = os.path.join(sparse_dir, "database.db")
+    _create_empty_colmap_database(db_path, image_paths)
+
+    # Create project.ini content (relative paths from sparse/0/)
+    project_ini_content = f"""[General]
+database_path=database.db
+image_path={os.path.relpath(images_dir, sparse_dir)}
+
+[Reconstruction]
+reconstruction_path=.
+"""
+
+    # Write project.ini in sparse/0/
+    project_ini_path = os.path.join(sparse_dir, "project.ini")
+    with open(project_ini_path, "w") as f:
+        f.write(project_ini_content)
+
+    logger.info(f"Created project.ini file: {project_ini_path}")
+    logger.info(f"Created empty database.db file: {db_path}")
+
+
+def _create_empty_colmap_database(db_path: str, image_paths: list[str]) -> None:
+    """
+    Create an empty COLMAP database with basic tables and image entries.
+
+    Args:
+        db_path: Path to create the database
+        image_paths: List of image file paths
+    """
+    # Create database connection
+    conn = sqlite3.connect(db_path)
+    cursor = conn.cursor()
+
+    # Create COLMAP database tables (simplified version)
+    cursor.execute(
+        """
+        CREATE TABLE cameras (
+            camera_id INTEGER PRIMARY KEY,
+            model INTEGER,
+            width INTEGER,
+            height INTEGER,
+            params BLOB,
+            prior_focal_length INTEGER
+        )
+    """
+    )
+
+    cursor.execute(
+        """
+        CREATE TABLE images (
+            image_id INTEGER PRIMARY KEY,
+            name TEXT,
+            camera_id INTEGER,
+            prior_qw REAL,
+            prior_qx REAL,
+            prior_qy REAL,
+            prior_qz REAL,
+            prior_tx REAL,
+            prior_ty REAL,
+            prior_tz REAL
+        )
+    """
+    )
+
+    cursor.execute(
+        """
+        CREATE TABLE keypoints (
+            image_id INTEGER,
+            rows INTEGER,
+            cols INTEGER,
+            data BLOB
+        )
+    """
+    )
+
+    cursor.execute(
+        """
+        CREATE TABLE descriptors (
+            image_id INTEGER,
+            rows INTEGER,
+            cols INTEGER,
+            data BLOB
+        )
+    """
+    )
+
+    cursor.execute(
+        """
+        CREATE TABLE matches (
+            pair_id INTEGER,
+            rows INTEGER,
+            cols INTEGER,
+            data BLOB
+        )
+    """
+    )
+
+    # Add image entries (without feature data, just names)
+    for i, image_path in enumerate(image_paths, 1):
+        image_name = os.path.basename(image_path)
+        cursor.execute(
+            "INSERT INTO images (image_id, name, camera_id) VALUES (?, ?, ?)",
+            (i, image_name, 1),  # camera_id will be updated when cameras are imported
+        )
+
+    conn.commit()
+    conn.close()

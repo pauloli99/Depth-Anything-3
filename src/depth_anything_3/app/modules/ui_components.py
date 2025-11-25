@@ -199,12 +199,12 @@ class UIComponents:
             measure_text,
         )
 
-    def create_inference_control_section(self) -> Tuple[gr.Dropdown, gr.Checkbox]:
+    def create_inference_control_section(self) -> Tuple[gr.Dropdown, gr.Dropdown, gr.Checkbox]:
         """
         Create the inference control section (before inference).
 
         Returns:
-            Tuple of (process_res_method_dropdown, infer_gs)
+            Tuple of (process_res_method_dropdown, export_format_dropdown, infer_gs)
         """
         with gr.Row():
             process_res_method_dropdown = gr.Dropdown(
@@ -212,6 +212,13 @@ class UIComponents:
                 value="low_res",
                 label="Image Processing Method",
                 info="low_res for much more images",
+                scale=1,
+            )
+            export_format_dropdown = gr.Dropdown(
+                choices=["glb", "colmap", "mini_npz"],
+                value="glb",
+                label="Export Format",
+                info="glb: 3D scene, colmap: COLMAP format, mini_npz: compressed data",
                 scale=1,
             )
             # Modify line 220, add color class
@@ -225,7 +232,7 @@ class UIComponents:
                 scale=1,
             )
 
-        return (process_res_method_dropdown, infer_gs)
+        return (process_res_method_dropdown, export_format_dropdown, infer_gs)
 
     def create_display_control_section(
         self,
