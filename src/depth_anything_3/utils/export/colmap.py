@@ -23,7 +23,7 @@ from PIL import Image
 from depth_anything_3.specs import Prediction
 from depth_anything_3.utils.logger import logger
 
-from .glb import _depths_to_world_points_with_colors
+from .glb import _depths_to_world_points_with_colors, _filter_and_downsample
 
 
 def export_to_colmap(
@@ -32,6 +32,7 @@ def export_to_colmap(
     image_paths: list[str],
     conf_thresh_percentile: float = 40.0,
     process_res_method: str = "upper_bound_resize",
+    num_max_points: int = 1_000_000,
 ) -> None:
     # 1. Data preparation
     conf_thresh = np.percentile(prediction.conf, conf_thresh_percentile)
@@ -43,15 +44,24 @@ def export_to_colmap(
         prediction.conf,
         conf_thresh,
     )
+    num_points_original = len(points)
+    logger.info(f"Generated {num_points_original} points from depth maps")
+
+    # Apply filtering and downsampling to limit number of points
+    points, colors = _filter_and_downsample(points, colors, num_max_points)
     num_points = len(points)
-    logger.info(f"Exporting to COLMAP with {num_points} points")
-    num_frames = len(prediction.processed_images)
-    h, w = prediction.processed_images.shape[1:3]
-    points_xyf = _create_xyf(num_frames, h, w)
-    points_xyf = points_xyf[prediction.conf >= conf_thresh]
+    logger.info(f"Exporting to COLMAP with {num_points} points (after filtering/downsampling)")
+
+    # Create point index mapping for tracks
+    # We need to map from downsampled points back to original pixel coordinates
+    point_index_mapping = _create_point_index_mapping(
+        prediction.depth, prediction.conf, conf_thresh, num_max_points
+    )
 
     # 2. Set Reconstruction
     reconstruction = pycolmap.Reconstruction()
+    num_frames = len(prediction.processed_images)
+    h, w = prediction.processed_images.shape[1:3]
 
     point3d_ids = []
     for vidx in range(num_points):
@@ -107,12 +117,18 @@ def export_to_colmap(
 
         # set point2d and update track
         point2d_list = []
-        points_in_frame = points_xyf[:, 2].astype(np.int32) == fidx
-        for vidx in np.where(points_in_frame)[0]:
-            point2d = points_xyf[vidx][:2]
+        # Find all pixels in this frame that have corresponding 3D points
+        frame_pixels = [
+            (y, x, point_idx) for (f, y, x), point_idx in point_index_mapping.items() if f == fidx
+        ]
+
+        for y, x, point_idx in frame_pixels:
+            # Scale coordinates back to original image size
+            point2d = np.array([x, y], dtype=float)
             point2d[0] *= orig_w / w
             point2d[1] *= orig_h / h
-            point3d_id = point3d_ids[vidx]
+
+            point3d_id = point3d_ids[point_idx]
             point2d_list.append(pycolmap.Point2D(point2d, point3d_id))
             reconstruction.point3D(point3d_id).track.add_element(
                 image.image_id, len(point2d_list) - 1
@@ -136,27 +152,52 @@ def export_to_colmap(
     _create_project_files(sparse_dir, export_dir, image_paths)
 
 
-def _create_xyf(num_frames, height, width):
+def _create_point_index_mapping(
+    depth: np.ndarray, conf: np.ndarray, conf_thresh: float, num_max_points: int
+) -> dict:
     """
-    Creates a grid of pixel coordinates and frame indices (fidx) for all frames.
+    Create mapping from pixel coordinates to downsampled point indices.
+
+    Args:
+        depth: Depth maps (N, H, W)
+        conf: Confidence maps (N, H, W)
+        conf_thresh: Confidence threshold
+        num_max_points: Maximum number of points to keep
+
+    Returns:
+        Dictionary mapping (frame_idx, y, x) to downsampled point index
     """
-    # Create coordinate grids for a single frame
-    y_grid, x_grid = np.indices((height, width), dtype=np.int32)
-    x_grid = x_grid[np.newaxis, :, :]
-    y_grid = y_grid[np.newaxis, :, :]
+    N, H, W = depth.shape
 
-    # Broadcast to all frames
-    x_coords = np.broadcast_to(x_grid, (num_frames, height, width))
-    y_coords = np.broadcast_to(y_grid, (num_frames, height, width))
+    # Collect all valid points with their coordinates
+    valid_points = []
+    for i in range(N):
+        d = depth[i]
+        c = conf[i] if conf is not None else None
+        valid = np.isfinite(d) & (d > 0)
+        if c is not None:
+            valid &= c >= conf_thresh
 
-    # Create frame indices and broadcast
-    f_idx = np.arange(num_frames, dtype=np.int32)[:, np.newaxis, np.newaxis]
-    f_coords = np.broadcast_to(f_idx, (num_frames, height, width))
+        if np.any(valid):
+            ys, xs = np.where(valid)
+            for y, x in zip(ys, xs):
+                valid_points.append((i, y, x, d[y, x]))  # (frame_idx, y, x, depth_value)
 
-    # Stack coordinates and frame indices
-    points_xyf = np.stack((x_coords, y_coords, f_coords), axis=-1)
+    # Sort by depth value (optional, for more deterministic sampling)
+    valid_points.sort(key=lambda x: x[3])
 
-    return points_xyf
+    # Apply downsampling to match _filter_and_downsample logic
+    if len(valid_points) > num_max_points:
+        # Random sampling to match _filter_and_downsample behavior
+        indices = np.random.choice(len(valid_points), num_max_points, replace=False)
+        valid_points = [valid_points[i] for i in indices]
+
+    # Create mapping from (frame_idx, y, x) to downsampled point index
+    point_mapping = {}
+    for idx, (frame_idx, y, x, _) in enumerate(valid_points):
+        point_mapping[(frame_idx, y, x)] = idx
+
+    return point_mapping
 
 
 def _create_project_files(sparse_dir: str, export_dir: str, image_paths: list[str]) -> None:

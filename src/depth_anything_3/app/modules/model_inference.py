@@ -181,6 +181,7 @@ class ModelInference:
                 "image_paths": image_paths,
                 "conf_thresh_percentile": save_percentage,
                 "process_res_method": actual_method,
+                "num_max_points": int(num_max_points),
             },
         }
         export(prediction, export_format, target_dir, **export_kwargs)
